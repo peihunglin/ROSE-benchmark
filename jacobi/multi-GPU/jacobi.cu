@@ -7,7 +7,6 @@
 #include <stdlib.h>
 #include <sys/time.h>
 #include <math.h>
-#include <omp.h>
 
 #define gpuErrchk(ans) { gpuAssert((ans), __FILE__, __LINE__); }
 inline void gpuAssert(cudaError_t code, char *file, int line, bool abort=true)
@@ -80,149 +79,184 @@ reductionkernel( float* lchange, int n ) /* lchange[n] stores the local reductio
 static float sumtime;
 
 
-void JacobiGPU( float* a, int input_n, int input_m, float w0, float w1, float w2, float tol, int Thr )
+void JacobiGPU( float* a, int input_n, int input_m, float w0, float w1, float w2, float tol, int Thr)
 {
     float change;
     int iters;
     size_t memsize;
-    size_t offset;
-    int bx, by, gx, gy;
-    float *da, *dnewa, *lchange;
+    int bx, by;
+    float *lchange;
     cudaEvent_t e1, e2;
     int n,m, devID;  
-    int numthread = omp_get_num_threads();
-    int tid = omp_get_thread_num();
+    int numDev;
     int accessflag_l, accessflag_h;
-    m = input_m;
-    n = input_n / numthread; 
     cudaError_t result;
-    result = cudaSetDevice(tid);
+    result = cudaGetDeviceCount(&numDev);
     gpuErrchk(result);   
-    result = cudaGetDevice(&devID);
-
-    accessflag_l = 0;
-    accessflag_h = 0;   
-    if(tid > 0)
-    {
-       cudaDeviceCanAccessPeer(&accessflag_l, (tid-1), tid);
-       cudaDeviceEnablePeerAccess(tid-1,0);
-    }
-    if(tid < numthread-1)
-    {
-       cudaDeviceCanAccessPeer(&accessflag_h, (tid+1), tid);
-       cudaDeviceEnablePeerAccess(tid+1,0);
-    }
-  
-    if(accessflag_l*accessflag_h)
-    { 
-      memsize = sizeof(float) * (n+2) * m;
-    }
-    else
-    {
-      memsize = sizeof(float) * (n+1) * m;
-    }
+    float* da[numDev];
+    float* dnewa[numDev];
+    int gx[numDev], gy[numDev];
+    m = input_m;
+    n = input_n / numDev; 
+//    result = cudaSetDevice(tid);
 
     bx = Thr;
     by = Thr;
-    cudaMalloc( &da, memsize );
-    cudaMalloc( &dnewa, memsize );
-//    cudaMalloc( &lchange, gx * gy * sizeof(float) );
-    printf("I am thread %d will allocate memory %p %d\n",tid,da, memsize); 
-
-    if(tid == 0)
+    for(devID=0;devID<numDev;devID++)
     {
-      gx = (n-1)/bx + ((n-1)%bx == 0?0:1);
-      gy = (m-2)/by + ((m-2)%by == 0?0:1);
-      result = cudaMemcpy( da, a, memsize, cudaMemcpyHostToDevice );
-      gpuErrchk(result);
-      result = cudaMemcpy( dnewa, a, memsize, cudaMemcpyHostToDevice );
-      gpuErrchk(result);
-    }
-    else if(tid == numthread-1)
-    {
-      gx = (n-1)/bx + ((n-1)%bx == 0?0:1);
-      gy = (m-2)/by + ((m-2)%by == 0?0:1);
-      result = cudaMemcpy( da, a+(tid*input_m*input_n/numthread)-m, memsize, cudaMemcpyHostToDevice );
-      gpuErrchk(result);
-      result = cudaMemcpy( dnewa, a+(tid*input_m*input_n/numthread)-m, memsize, cudaMemcpyHostToDevice );
-      gpuErrchk(result);
-    }
-    else
-    {
-      gx = (n)/bx + ((n)%bx == 0?0:1);
-      gy = (m-2)/by + ((m-2)%by == 0?0:1);
-      result = cudaMemcpy( da, a+(tid*input_m*input_n/numthread)-m, memsize, cudaMemcpyHostToDevice );
-      gpuErrchk(result);
-      result = cudaMemcpy( dnewa, a+(tid*input_m*input_n/numthread)-m, memsize, cudaMemcpyHostToDevice );
-      gpuErrchk(result);
+      result = cudaSetDevice(devID);
+      gpuErrchk(result);   
+      accessflag_l = 0;
+      accessflag_h = 0;   
+      if(devID > 0)
+      {
+         cudaDeviceCanAccessPeer(&accessflag_l, (devID-1), devID);
+         cudaDeviceEnablePeerAccess(devID-1,0);
+      }
+      if(devID < numDev-1)
+      {
+         cudaDeviceCanAccessPeer(&accessflag_h, (devID+1), devID);
+         cudaDeviceEnablePeerAccess(devID+1,0);
+      }
+      if(accessflag_l*accessflag_h)
+      { 
+        memsize = sizeof(float) * (n+2) * m;
+      }
+      else
+      {
+        memsize = sizeof(float) * (n+1) * m;
+      }
+      cudaMalloc( &da[devID], memsize );
+      cudaMalloc( &dnewa[devID], memsize );
+//      printf("%d %p %p\n",devID ,da[devID],dnewa[devID]);
+//    cudaMalloc( &lchange, gx[devID] * gy[devID] * sizeof(float) );
+    
+      if(devID == 0)
+      {
+        gx[devID] = (n-1)/bx + ((n-1)%bx == 0?0:1);
+        gy[devID] = (m-2)/by + ((m-2)%by == 0?0:1);
+        result = cudaMemcpy( da[devID], a, memsize, cudaMemcpyHostToDevice );
+        gpuErrchk(result);
+        result = cudaMemcpy( dnewa[devID], a, memsize, cudaMemcpyHostToDevice );
+        gpuErrchk(result);
+      }
+      else if(devID == numDev-1)
+      {
+        gx[devID] = (n-1)/bx + ((n-1)%bx == 0?0:1);
+        gy[devID] = (m-2)/by + ((m-2)%by == 0?0:1);
+        result = cudaMemcpy( da[devID], a+(devID*input_m*input_n/numDev)-m, memsize, cudaMemcpyHostToDevice );
+        gpuErrchk(result);
+        result = cudaMemcpy( dnewa[devID], a+(devID*input_m*input_n/numDev)-m, memsize, cudaMemcpyHostToDevice );
+        gpuErrchk(result);
+      }
+      else
+      {
+        gx[devID] = (n)/bx + ((n)%bx == 0?0:1);
+        gy[devID] = (m-2)/by + ((m-2)%by == 0?0:1);
+        result = cudaMemcpy( da[devID], a+(devID*input_m*input_n/numDev)-m, memsize, cudaMemcpyHostToDevice );
+        gpuErrchk(result);
+        result = cudaMemcpy( dnewa[devID], a+(devID*input_m*input_n/numDev)-m, memsize, cudaMemcpyHostToDevice );
+        gpuErrchk(result);
+      }
     }
 //    sumtime = 0.0f;
 //    cudaEventCreate( &e1 );
 //    cudaEventCreate( &e2 );
-
-    dim3 block( bx, by );
-    dim3 grid( gx, gy );
-        printf("\nGrids =  %i and %i\n", grid.x, grid.y);
-
     iters = 0;
     do{
-        float msec;
-        ++iters;
+      float msec;
+      ++iters;
 
-//        cudaEventRecord( e1 );
-        if(tid == 0)
-        {
-          jacobikernel<<<(gx,gy), block>>>( da, dnewa, lchange, n+1, m, w0, w1, w2 );
-        }
-        else if(tid == numthread-1)
-        {
-          jacobikernel<<< (gx,gy), block >>>( da, dnewa, lchange, n+1, m, w0, w1, w2 );
-        }
-        else
-        {
-          jacobikernel<<< (gx,gy), block >>>( da, dnewa, lchange, n+2, m, w0, w1, w2 );
-        }
-//        reductionkernel<<< 1, bx*by >>>( lchange, gx*gy ); /* both levels of reduction happen on GPU */
-//        cudaEventRecord( e2 );
-        
-        // exchange halo
-        if(tid > 0)
-        {
-          result = cudaMemcpyPeer(dnewa+(n-1)*m,tid-1,dnewa,tid,sizeof(float)*m); 
-          gpuErrchk(result);
-        }
-        if(tid < numthread-1)
-        {
-          result = cudaMemcpyPeerAsync(dnewa,tid+1,dnewa+(n-1)*m,tid,sizeof(float)*m,0); 
-          gpuErrchk(result);
-        }
+    for(devID=0;devID<numDev;devID++)
+    {
+      result = cudaSetDevice(devID);
+      gpuErrchk(result);   
+      dim3 block( bx, by ,1);
+//          cudaEventRecord( e1 );
+      printf("\n Device:%d Grids =  %i and %i\n", devID, gx[devID], gy[devID]);
+          if(devID == 0)
+          {
+            dim3 grid( 64,16,1);
+            jacobikernel<<<grid, block>>>( da[devID], dnewa[devID], lchange, n+1, m, w0, w1, w2 );
+          }
+          else if(devID == numDev-1)
+          {
+            dim3 grid( 64,16,1);
+            jacobikernel<<<grid, block>>>( da[devID], dnewa[devID], lchange, n+1, m, w0, w1, w2 );
+          }
+          else
+          {
+            dim3 grid( 64,16,1);
+            jacobikernel<<<grid, block>>>( da[devID], dnewa[devID], lchange, n+2, m, w0, w1, w2 );
+          }
+     }
+     cudaDeviceSynchronize();
+//          reductionkernel<<< 1, bx*by >>>( lchange, gx[devID]*gy[devID] ); /* both levels of reduction happen on GPU */
+//          cudaEventRecord( e2 );
+          
+    for(devID=0;devID<numDev;devID++)
+    {
+          result = cudaSetDevice(devID);
+          gpuErrchk(result);   
+          // exchange halo
+          if(devID > 0)
+          {
+            if(devID == 1)
+              result = cudaMemcpyPeer(dnewa[devID-1]+n*m,devID-1,dnewa[devID]+m,devID,sizeof(float)*m);
+            else 
+              result = cudaMemcpyPeer(dnewa[devID-1]+(n+1)*m,devID-1,dnewa[devID]+m,devID,sizeof(float)*m);
+            gpuErrchk(result);
+          }
+          if(devID < numDev-1)
+          {
+            if(devID == 0)
+              result = cudaMemcpyPeerAsync(dnewa[devID+1],devID+1,dnewa[devID]+(n-1)*m,devID,sizeof(float)*m,0);
+            else 
+              result = cudaMemcpyPeerAsync(dnewa[devID+1],devID+1,dnewa[devID]+n*m,devID,sizeof(float)*m,0);
+            gpuErrchk(result);
+          }
 
-//        result = cudaMemcpy( &change, lchange, sizeof(float), cudaMemcpyDeviceToHost ); /* copy final reduction result to CPU */
-//        gpuErrchk(result);
-//        cudaEventElapsedTime( &msec, e1, e2 );
-//        sumtime += msec;
-        float *ta;
-        ta = da;
-        da = dnewa;
-        dnewa = ta; 
-    //}while( change > tol );
-    }while( iters <= 5000);
+//          result = cudaMemcpy( &change, lchange, sizeof(float), cudaMemcpyDeviceToHost ); /* copy final reduction result to CPU */
+//          gpuErrchk(result);
+//          cudaEventElapsedTime( &msec, e1, e2 );
+//          sumtime += msec;
+    } 
+    cudaDeviceSynchronize();
+    for(devID=0;devID<numDev;devID++)
+    {
+          result = cudaSetDevice(devID);
+          gpuErrchk(result);   
+          float *ta;
+          ta = da[devID];
+          da[devID] = dnewa[devID];
+          dnewa[devID] = ta; 
+    }
+    }while( iters <= 1);
+//}while( change > tol );
+  
+
+    for(devID=0;devID<numDev;devID++)
+    {
+      result = cudaSetDevice(devID);
+      gpuErrchk(result);   
+
 //    printf( "JacobiGPU  converged in %d iterations to residual %f\n", iters, change );
 //    printf( "JacobiGPU  used %f seconds total\n", sumtime/1000.0f );
-    if(tid == 0)
+    if(devID == 0)
     {
-      cudaMemcpy( a, dnewa, memsize-m*sizeof(float), cudaMemcpyDeviceToHost );
+      cudaMemcpy( a, dnewa[devID], m*n*sizeof(float), cudaMemcpyDeviceToHost );
     }
-    else if(tid == numthread-1)
+    else if(devID == numDev-1)
     {
-      cudaMemcpy( a+(tid*input_m*input_n/numthread), dnewa+m, memsize-m*sizeof(float), cudaMemcpyDeviceToHost );
+      cudaMemcpy( a+(devID*input_m*input_n/numDev), dnewa[devID]+m, m*n*sizeof(float), cudaMemcpyDeviceToHost );
     }
     else
     {
-      cudaMemcpy( a+(tid*input_m*input_n/numthread), dnewa+m, memsize-2*m*sizeof(float), cudaMemcpyDeviceToHost );
+      cudaMemcpy( a+(devID*input_m*input_n/numDev), dnewa[devID]+m, m*n*sizeof(float), cudaMemcpyDeviceToHost );
     }
-    cudaFree( da );
-    cudaFree( dnewa );
+    cudaFree( da[devID] );
+    cudaFree( dnewa[devID] );
+    }
     cudaFree( lchange );
     cudaEventDestroy( e1 );
     cudaEventDestroy( e2 );
@@ -270,11 +304,8 @@ main( int argc, char* argv[] )
     int ms;
     float fms;
     int Thr;
-    int devCount,devIdx;
     cudaError_t cudareturn;
 
-    cudaGetDeviceCount(&devCount);
-    omp_set_num_threads(devCount);
 #if 0
     if( argc <= 1 ){
         fprintf( stderr, "%s sizen [sizem]\n", argv[0] );
@@ -290,9 +321,9 @@ main( int argc, char* argv[] )
         if( m <= 0 ) m = 100;
     }
 #endif
-    n = 16;
+    n = 1024;
     m=n; 
-    Thr=4;
+    Thr=16;
 
     printf( "Jacobi %d x %d\n", n, m );
 
@@ -303,10 +334,8 @@ main( int argc, char* argv[] )
 
     gettimeofday( &tt1, NULL );
 
-#pragma omp parallel default(shared) 
-{
-    JacobiGPU( a_h, n, m, .2, .1, .1, .1, Thr );
-}
+    JacobiGPU( a_h, n, m, .2, .1, .1, .1, Thr);
+
     gettimeofday( &tt2, NULL );
     ms = (tt2.tv_sec - tt1.tv_sec);
     ms = ms * 1000000 + (tt2.tv_usec - tt1.tv_usec);

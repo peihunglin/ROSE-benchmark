@@ -115,7 +115,7 @@ void JacobiGPU( float* a, int n, int m, float w0, float w1, float w2, float tol,
         da = dnewa;
         dnewa = ta; 
     //}while( change > tol );
-    }while( iters <=5000);
+    }while( iters <=1);
     printf( "JacobiGPU  converged in %d iterations to residual %f\n", iters, change );
     printf( "JacobiGPU  used %f seconds total\n", sumtime/1000.0f );
     cudaMemcpy( a, dnewa, memsize, cudaMemcpyDeviceToHost );
@@ -183,9 +183,9 @@ main( int argc, char* argv[] )
         if( m <= 0 ) m = 100;
     }
 #endif
-    n = 16;
+    n = 1024;
     m=n; 
-    Thr=4;
+    Thr=16;
 
     printf( "Jacobi %d x %d\n", n, m );
 
