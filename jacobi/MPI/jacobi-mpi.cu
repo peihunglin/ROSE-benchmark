@@ -127,9 +127,8 @@ extern "C" void dumpFile(float *a, int rank, int m, int n, char* prefix)
     fclose(initfile);
 }
 
-extern "C" void JacobiGPU( float* a, int n, int m, float w0, float w1, float w2, float tol, int Thr, float *da, float *dnewa, float *lchange)
+extern "C" void JacobiGPU( float* a, int n, int m, float w0, float w1, float w2, float tol, int Thr, float *da, float *dnewa, float *lchange, float *sumtime, float *change)
 {
-    float change;
     int bx, by, gx, gy;
     cudaEvent_t e1, e2;
 
@@ -142,8 +141,8 @@ extern "C" void JacobiGPU( float* a, int n, int m, float w0, float w1, float w2,
     gy = (n-2)/by + ((n-2)%by == 0?0:1);
 //        printf("\nGrids =  %i and %i\n", gx, gy);
 //    sumtime = 0.0f;
-//    cudaEventCreate( &e1 );
-//    cudaEventCreate( &e2 );
+    cudaEventCreate( &e1 );
+    cudaEventCreate( &e2 );
 
     dim3 block( bx, by );
     dim3 grid( gx, gy );
@@ -152,19 +151,19 @@ extern "C" void JacobiGPU( float* a, int n, int m, float w0, float w1, float w2,
 
     float msec;
 
-//    cudaEventRecord( e1 );
+    cudaEventRecord( e1 );
     jacobikernel<<< grid, block >>>( da, dnewa, lchange, n, m, w0, w1, w2 );
-//    reductionkernel<<< 1, bx*by >>>( lchange, gx*gy ); /* both levels of reduction happen on GPU */
-//    cudaEventRecord( e2 );
+    reductionkernel<<< 1, bx*by >>>( lchange, gx*gy ); /* both levels of reduction happen on GPU */
+    cudaEventRecord( e2 );
 
-//    cudaMemcpy( &change, lchange, sizeof(float), cudaMemcpyDeviceToHost ); /* copy final reduction result to CPU */
-//    cudaEventElapsedTime( &msec, e1, e2 );
-//    sumtime += msec;
-//    cudaMemcpy( (a+m), (dnewa+m), sizeof(float) * m, cudaMemcpyDeviceToHost );
-//    cudaMemcpy( (a+n*m), (dnewa+n*m), sizeof(float) * m, cudaMemcpyDeviceToHost );
+    cudaMemcpy( change, lchange, sizeof(float), cudaMemcpyDeviceToHost ); /* copy final reduction result to CPU */
+    cudaEventElapsedTime( &msec, e1, e2 );
+    *sumtime += msec;
+    cudaMemcpy( (a+m), (dnewa+m), sizeof(float) * m, cudaMemcpyDeviceToHost );
+    cudaMemcpy( (a+n*m), (dnewa+n*m), sizeof(float) * m, cudaMemcpyDeviceToHost );
 
-//    cudaEventDestroy( e1 );
-//    cudaEventDestroy( e2 );
+    cudaEventDestroy( e1 );
+    cudaEventDestroy( e2 );
 }
 
 extern "C" void cleanDevice(float *a, float *da, float *dnewa, float *lchange,int m, int n)

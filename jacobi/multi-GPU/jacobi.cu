@@ -18,15 +18,18 @@ inline void gpuAssert(cudaError_t code, char *file, int line, bool abort=true)
    }
 }
 __global__ void
-jacobikernel( float* a, float* newa, float* lchange, int n, int m, float w0, float w1, float w2 )
+jacobikernel( float* a, float* newa, float* lchange, int n, int m, float w0, float w1, float w2 , int devID, int numDev)
 {        
     int ti = threadIdx.x;
     int tj = threadIdx.y;
     int i = blockIdx.x * blockDim.x + ti + 1;
     int j = blockIdx.y * blockDim.y + tj + 1;
+    int i_upbound, j_upbound;
+    i_upbound = m-1;
+    j_upbound = n-1;
 /* looks like arrays are linearized, so explicit address calculation is used to simulate 2-D access */
 // I think the linearization is wrong: it should be a[i*m + j -1] instead of a[j*m+i-1]
-    if((i < m-1) && (j < n-1))
+    if((i < i_upbound) && (j < j_upbound))
     {
     newa[j*m+i] = w0*a[j*m+i] +
             w1 * (a[j*m+i-1] + a[(j-1)*m+i] +
@@ -34,21 +37,21 @@ jacobikernel( float* a, float* newa, float* lchange, int n, int m, float w0, flo
             w2 * (a[(j-1)*m+i-1] + a[(j+1)*m+i-1] +
                   a[(j-1)*m+i+1] + a[(j+1)*m+i+1]);
     }
-//    __shared__ float mychange[256]; /* fixed 16x16 2-D thread block: each thread stores its own change into mychange[] */
-//// convert 2-D (ti,tj) into a 1-D ii , so 2-D block's computation results can fit into a 1-D array mychange[]
-//// Again, correct conversion should: ti*blockDim.y + tj
-//    int ii = ti+blockDim.x*tj;
-//    mychange[ii] = fabsf( newa[j*m+i] - a[j*m+i] );
-//    __syncthreads();
-//    // contiguous range reduction pattern: half folding and add
-//    int nn = blockDim.x * blockDim.y; // total number of threads within the current thread block
-//    while( (nn>>=1) > 0 ){
-//        if( ii < nn )
-//            mychange[ii] = fmaxf( mychange[ii], mychange[ii+nn] );
-//        __syncthreads();
-//    }
-//    if( ii == 0 ) // thread (0,0) writes the block level reduction result (mychange) to grid level result variable: lchange[]
-//        lchange[blockIdx.x + gridDim.x*blockIdx.y] = mychange[0];
+    __shared__ float mychange[256]; /* fixed 16x16 2-D thread block: each thread stores its own change into mychange[] */
+// convert 2-D (ti,tj) into a 1-D ii , so 2-D block's computation results can fit into a 1-D array mychange[]
+// Again, correct conversion should: ti*blockDim.y + tj
+    int ii = ti+blockDim.x*tj;
+    mychange[ii] = fabsf( newa[j*m+i] - a[j*m+i] );
+    __syncthreads();
+    // contiguous range reduction pattern: half folding and add
+    int nn = blockDim.x * blockDim.y; // total number of threads within the current thread block
+    while( (nn>>=1) > 0 ){
+        if( ii < nn )
+            mychange[ii] = fmaxf( mychange[ii], mychange[ii+nn] );
+        __syncthreads();
+    }
+    if( ii == 0 ) // thread (0,0) writes the block level reduction result (mychange) to grid level result variable: lchange[]
+        lchange[blockIdx.x + gridDim.x*blockIdx.y] = mychange[0];
 }
 
 __global__ void
@@ -76,17 +79,15 @@ reductionkernel( float* lchange, int n ) /* lchange[n] stores the local reductio
         lchange[0] = mychange[0];
 }
 
-static float sumtime;
+static float sumtime[4];
 
 
 void JacobiGPU( float* a, int input_n, int input_m, float w0, float w1, float w2, float tol, int Thr)
 {
-    float change;
+    float change, change_red;
     int iters;
     size_t memsize;
     int bx, by;
-    float *lchange;
-    cudaEvent_t e1, e2;
     int n,m, devID;  
     int numDev;
     int accessflag_l, accessflag_h;
@@ -95,10 +96,12 @@ void JacobiGPU( float* a, int input_n, int input_m, float w0, float w1, float w2
     gpuErrchk(result);   
     float* da[numDev];
     float* dnewa[numDev];
+    float* lchange[numDev];
     int gx[numDev], gy[numDev];
+    cudaStream_t stream[numDev];
+    cudaEvent_t e1[numDev], e2[numDev];
     m = input_m;
     n = input_n / numDev; 
-//    result = cudaSetDevice(tid);
 
     bx = Thr;
     by = Thr;
@@ -128,120 +131,123 @@ void JacobiGPU( float* a, int input_n, int input_m, float w0, float w1, float w2
       }
       cudaMalloc( &da[devID], memsize );
       cudaMalloc( &dnewa[devID], memsize );
-//      printf("%d %p %p\n",devID ,da[devID],dnewa[devID]);
-//    cudaMalloc( &lchange, gx[devID] * gy[devID] * sizeof(float) );
+      result = cudaStreamCreate(&stream[devID]);
     
       if(devID == 0)
       {
         gx[devID] = (n-1)/bx + ((n-1)%bx == 0?0:1);
         gy[devID] = (m-2)/by + ((m-2)%by == 0?0:1);
-        result = cudaMemcpy( da[devID], a, memsize, cudaMemcpyHostToDevice );
+        result = cudaMemcpyAsync( da[devID], a, memsize, cudaMemcpyHostToDevice, stream[devID] );
         gpuErrchk(result);
-        result = cudaMemcpy( dnewa[devID], a, memsize, cudaMemcpyHostToDevice );
+        result = cudaMemcpyAsync( dnewa[devID], a, memsize, cudaMemcpyHostToDevice, stream[devID] );
         gpuErrchk(result);
       }
       else if(devID == numDev-1)
       {
         gx[devID] = (n-1)/bx + ((n-1)%bx == 0?0:1);
         gy[devID] = (m-2)/by + ((m-2)%by == 0?0:1);
-        result = cudaMemcpy( da[devID], a+(devID*input_m*input_n/numDev)-m, memsize, cudaMemcpyHostToDevice );
+        result = cudaMemcpyAsync( da[devID], a+(devID*input_m*input_n/numDev)-m, memsize, cudaMemcpyHostToDevice, stream[devID] );
         gpuErrchk(result);
-        result = cudaMemcpy( dnewa[devID], a+(devID*input_m*input_n/numDev)-m, memsize, cudaMemcpyHostToDevice );
+        result = cudaMemcpyAsync( dnewa[devID], a+(devID*input_m*input_n/numDev)-m, memsize, cudaMemcpyHostToDevice, stream[devID] );
         gpuErrchk(result);
       }
       else
       {
         gx[devID] = (n)/bx + ((n)%bx == 0?0:1);
         gy[devID] = (m-2)/by + ((m-2)%by == 0?0:1);
-        result = cudaMemcpy( da[devID], a+(devID*input_m*input_n/numDev)-m, memsize, cudaMemcpyHostToDevice );
+        result = cudaMemcpyAsync( da[devID], a+(devID*input_m*input_n/numDev)-m, memsize, cudaMemcpyHostToDevice, stream[devID] );
         gpuErrchk(result);
-        result = cudaMemcpy( dnewa[devID], a+(devID*input_m*input_n/numDev)-m, memsize, cudaMemcpyHostToDevice );
+        result = cudaMemcpyAsync( dnewa[devID], a+(devID*input_m*input_n/numDev)-m, memsize, cudaMemcpyHostToDevice, stream[devID] );
         gpuErrchk(result);
       }
+      cudaMalloc( &lchange[devID], gx[devID] * gy[devID] * sizeof(float) );
+      cudaEventCreate( &e1[devID] );
+      cudaEventCreate( &e2[devID] );
+      sumtime[devID] = 0.0f;
     }
-//    sumtime = 0.0f;
-//    cudaEventCreate( &e1 );
-//    cudaEventCreate( &e2 );
     iters = 0;
     do{
-      float msec;
+      float msec[numDev];
       ++iters;
-
-    for(devID=0;devID<numDev;devID++)
-    {
-      result = cudaSetDevice(devID);
-      gpuErrchk(result);   
-      dim3 block( bx, by ,1);
-//          cudaEventRecord( e1 );
-      printf("\n Device:%d Grids =  %i and %i\n", devID, gx[devID], gy[devID]);
-          if(devID == 0)
-          {
-            dim3 grid( 64,16,1);
-            jacobikernel<<<grid, block>>>( da[devID], dnewa[devID], lchange, n+1, m, w0, w1, w2 );
-          }
-          else if(devID == numDev-1)
-          {
-            dim3 grid( 64,16,1);
-            jacobikernel<<<grid, block>>>( da[devID], dnewa[devID], lchange, n+1, m, w0, w1, w2 );
-          }
-          else
-          {
-            dim3 grid( 64,16,1);
-            jacobikernel<<<grid, block>>>( da[devID], dnewa[devID], lchange, n+2, m, w0, w1, w2 );
-          }
+      change_red = 0.f;
+     for(devID=0;devID<numDev;devID++)
+     {
+       result = cudaSetDevice(devID);
+       gpuErrchk(result);   
+       dim3 block( bx, by ,1);
+       cudaEventRecord( e1[devID] );
+       //printf("\n Device:%d Grids =  %i and %i\n", devID, gx[devID], gy[devID]);
+       if(devID == 0)
+       {
+         dim3 grid( 64,16,1);
+         jacobikernel<<<grid, block, 0, stream[devID]>>>( da[devID], dnewa[devID], lchange[devID], n+1, m, w0, w1, w2, devID, numDev);
+       }
+       else if(devID == numDev-1)
+       {
+         dim3 grid( 64,16,1);
+         jacobikernel<<<grid, block, 0, stream[devID]>>>( da[devID], dnewa[devID], lchange[devID], n+1, m, w0, w1, w2, devID, numDev);
+       }
+       else
+       {
+         dim3 grid( 64,16,1);
+         jacobikernel<<<grid, block, 0, stream[devID]>>>( da[devID], dnewa[devID], lchange[devID], n+2, m, w0, w1, w2, devID, numDev);
+       }
+       reductionkernel<<< 1, bx*by , 0, stream[devID]>>>( lchange[devID], gx[devID]*gy[devID] ); /* both levels of reduction happen on GPU */
+       cudaEventRecord( e2[devID] );
      }
      cudaDeviceSynchronize();
-//          reductionkernel<<< 1, bx*by >>>( lchange, gx[devID]*gy[devID] ); /* both levels of reduction happen on GPU */
-//          cudaEventRecord( e2 );
-          
-    for(devID=0;devID<numDev;devID++)
-    {
-          result = cudaSetDevice(devID);
-          gpuErrchk(result);   
-          // exchange halo
-          if(devID > 0)
-          {
-            if(devID == 1)
-              result = cudaMemcpyPeer(dnewa[devID-1]+n*m,devID-1,dnewa[devID]+m,devID,sizeof(float)*m);
-            else 
-              result = cudaMemcpyPeer(dnewa[devID-1]+(n+1)*m,devID-1,dnewa[devID]+m,devID,sizeof(float)*m);
-            gpuErrchk(result);
-          }
-          if(devID < numDev-1)
-          {
-            if(devID == 0)
-              result = cudaMemcpyPeerAsync(dnewa[devID+1],devID+1,dnewa[devID]+(n-1)*m,devID,sizeof(float)*m,0);
-            else 
-              result = cudaMemcpyPeerAsync(dnewa[devID+1],devID+1,dnewa[devID]+n*m,devID,sizeof(float)*m,0);
-            gpuErrchk(result);
-          }
-
-//          result = cudaMemcpy( &change, lchange, sizeof(float), cudaMemcpyDeviceToHost ); /* copy final reduction result to CPU */
-//          gpuErrchk(result);
-//          cudaEventElapsedTime( &msec, e1, e2 );
-//          sumtime += msec;
-    } 
-    cudaDeviceSynchronize();
-    for(devID=0;devID<numDev;devID++)
-    {
-          result = cudaSetDevice(devID);
-          gpuErrchk(result);   
-          float *ta;
-          ta = da[devID];
-          da[devID] = dnewa[devID];
-          dnewa[devID] = ta; 
-    }
-    }while( iters <= 1);
+     for(devID=0;devID<numDev;devID++)
+     {
+       result = cudaMemcpy( &change, lchange[devID], sizeof(float), cudaMemcpyDeviceToHost ); /* copy final reduction result to CPU */
+       gpuErrchk(result);
+       change_red = (change > change_red) ? change : change_red;
+     }
+           
+     for(devID=0;devID<numDev;devID++)
+     {
+           result = cudaSetDevice(devID);
+           gpuErrchk(result);   
+           // exchange halo
+           if(devID > 0)
+           {
+             if(devID == 1)
+               result = cudaMemcpyPeerAsync(dnewa[devID-1]+n*m,devID-1,dnewa[devID]+m,devID,sizeof(float)*m, stream[devID]);
+             else 
+               result = cudaMemcpyPeerAsync(dnewa[devID-1]+(n+1)*m,devID-1,dnewa[devID]+m,devID,sizeof(float)*m, stream[devID]);
+             gpuErrchk(result);
+           }
+           if(devID < numDev-1)
+           {
+             if(devID == 0)
+               result = cudaMemcpyPeerAsync(dnewa[devID+1],devID+1,dnewa[devID]+(n-1)*m,devID,sizeof(float)*m, stream[devID]);
+             else 
+               result = cudaMemcpyPeerAsync(dnewa[devID+1],devID+1,dnewa[devID]+n*m,devID,sizeof(float)*m, stream[devID]);
+             gpuErrchk(result);
+           }
+           cudaEventElapsedTime( &msec[devID], e1[devID], e2[devID] );
+           sumtime[devID] += msec[devID];
+     } 
+//     cudaDeviceSynchronize();
+     for(devID=0;devID<numDev;devID++)
+     {
+           result = cudaSetDevice(devID);
+           gpuErrchk(result);   
+           float *ta;
+           ta = da[devID];
+           da[devID] = dnewa[devID];
+           dnewa[devID] = ta; 
+     }
+    }while( iters <= 5000);
 //}while( change > tol );
-  
 
+    printf( "JacobiGPU  converged in %d iterations to residual %f\n", iters, change_red );
+    for(devID=0;devID<numDev;devID++)
+      printf( "Device %d: JacobiGPU  used %f seconds total\n", devID, sumtime[devID]/1000.0f );
     for(devID=0;devID<numDev;devID++)
     {
       result = cudaSetDevice(devID);
       gpuErrchk(result);   
 
-//    printf( "JacobiGPU  converged in %d iterations to residual %f\n", iters, change );
-//    printf( "JacobiGPU  used %f seconds total\n", sumtime/1000.0f );
     if(devID == 0)
     {
       cudaMemcpy( a, dnewa[devID], m*n*sizeof(float), cudaMemcpyDeviceToHost );
@@ -256,10 +262,10 @@ void JacobiGPU( float* a, int input_n, int input_m, float w0, float w1, float w2
     }
     cudaFree( da[devID] );
     cudaFree( dnewa[devID] );
+    cudaFree( lchange[devID] );
+    cudaEventDestroy( e1[devID] );
+    cudaEventDestroy( e2[devID] );
     }
-    cudaFree( lchange );
-    cudaEventDestroy( e1 );
-    cudaEventDestroy( e2 );
 }
 
 static void init( float* a, int n, int m )
@@ -304,7 +310,6 @@ main( int argc, char* argv[] )
     int ms;
     float fms;
     int Thr;
-    cudaError_t cudareturn;
 
 #if 0
     if( argc <= 1 ){
@@ -330,7 +335,7 @@ main( int argc, char* argv[] )
     a_h = (float*)malloc( sizeof(float) * n * m );
 
     init( a_h, n, m );
-    dumpFile(a_h,m,n,"init");
+//    dumpFile(a_h,m,n,"init");
 
     gettimeofday( &tt1, NULL );
 
@@ -341,6 +346,6 @@ main( int argc, char* argv[] )
     ms = ms * 1000000 + (tt2.tv_usec - tt1.tv_usec);
     fms = (float)ms / 1000000.0f;
     printf( "time(gpu ) = %f seconds\n", fms );
-    dumpFile(a_h,m,n,"new");
+//    dumpFile(a_h,m,n,"new");
 }
 

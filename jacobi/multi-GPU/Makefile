@@ -9,7 +9,7 @@ DEPS =
 all:	jacobi
 
 jacobi: jacobi.cu
-	$(NVCC) ${CUDA_LINK} -o jacobi jacobi.cu -g
+	$(NVCC) ${CUDA_LINK} -o jacobi jacobi.cu 
 
 clean:
 	rm jacobi *.o 

@@ -9,7 +9,7 @@
 #include <math.h>
 #include <mpi.h>
 
-void JacobiGPU( float* a, int n, int m, float w0, float w1, float w2, float tol, int Thr , float *da, float *dnewa, float *lchange);
+void JacobiGPU( float* a, int n, int m, float w0, float w1, float w2, float tol, int Thr , float *da, float *dnewa, float *lchange, float *sumtime, float *change);
 void initDevice(float *a, int n, int m, float** da, float** dnewa, float** lchange , int Thr, int rank);
 void cleanDevice(float *a, float *da, float *dnewa, float *lchange,int m, int n);
 
@@ -64,7 +64,7 @@ main( int argc, char* argv[] )
         if( m <= 0 ) m = 100;
     }
 #endif
-    m = 256;
+    m = 1024;
     n=m/nprocs; 
     Thr=16;
 
@@ -79,7 +79,7 @@ main( int argc, char* argv[] )
 
 
     init( a, n, m, rank );
-    dumpFile(a,rank,m,n,"init_");
+//    dumpFile(a,rank,m,n,"init_");
     initDevice(a,n,m,&da,&dnewa,&lchange,Thr, rank);
 //    printf("MPI rank %d has address of %p %p\n",rank,da,dnewa);
     idx[0] = da;
@@ -87,6 +87,8 @@ main( int argc, char* argv[] )
     int iters = 0;
     int i0 = 0;
     int i1 = 1;
+    float sumtime = 0.f;
+    float change;
     gettimeofday( &tt1, NULL );
     do{
         ++iters;
@@ -117,14 +119,14 @@ main( int argc, char* argv[] )
 	    MPI_Recv( (float*)(a), m, MPI_FLOAT, rank - 1, 1, 
 		      MPI_COMM_WORLD, &status );
         }
-        JacobiGPU( a, n, m, .2, .1, .1, .1, Thr, idx[i0], idx[i1], lchange);
+        JacobiGPU( a, n, m, .2, .1, .1, .1, Thr, idx[i0], idx[i1], lchange,&sumtime, &change);
         i0 = 1 - i0;
         i1 = 1 - i1;
     //}while( change > tol );
-    }while( iters <= 1000);
+    }while( iters <= 5000);
     gettimeofday( &tt2, NULL );
-////    printf( "JacobiGPU  converged in %d iterations to residual %f\n", iters, change );
-////    printf( "JacobiGPU  used %f seconds total\n", sumtime/1000.0f );
+    printf( "JacobiGPU  converged in %d iterations to residual %f\n", iters, lchange );
+    printf( "JacobiGPU  used %f seconds total\n", sumtime/1000.0f );
 // 
     if(rank == 0)
     {
@@ -134,7 +136,7 @@ main( int argc, char* argv[] )
     printf( "time(gpu ) = %f seconds\n", fms );
     }
     cleanDevice(a, idx[i0], idx[i1], lchange,m,n);
-    dumpFile(a,rank,m,n,"new_");
+//    dumpFile(a,rank,m,n,"new_");
 //
     MPI_Finalize();
     return 0;

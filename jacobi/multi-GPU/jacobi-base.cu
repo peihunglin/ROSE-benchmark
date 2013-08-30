@@ -115,7 +115,7 @@ void JacobiGPU( float* a, int n, int m, float w0, float w1, float w2, float tol,
         da = dnewa;
         dnewa = ta; 
     //}while( change > tol );
-    }while( iters <=1);
+    }while( iters <=5000);
     printf( "JacobiGPU  converged in %d iterations to residual %f\n", iters, change );
     printf( "JacobiGPU  used %f seconds total\n", sumtime/1000.0f );
     cudaMemcpy( a, dnewa, memsize, cudaMemcpyDeviceToHost );
@@ -192,7 +192,7 @@ main( int argc, char* argv[] )
     a = (float*)malloc( sizeof(float) * n * m );
 
     init( a, n, m );
-    dumpFile(a,m,n,"init");
+//    dumpFile(a,m,n,"init");
 
     gettimeofday( &tt1, NULL );
     JacobiGPU( a, n, m, .2, .1, .1, .1, Thr );
@@ -201,6 +201,6 @@ main( int argc, char* argv[] )
     ms = ms * 1000000 + (tt2.tv_usec - tt1.tv_usec);
     fms = (float)ms / 1000000.0f;
     printf( "time(gpu ) = %f seconds\n", fms );
-    dumpFile(a,m,n,"new");
+//    dumpFile(a,m,n,"new");
 }
 
