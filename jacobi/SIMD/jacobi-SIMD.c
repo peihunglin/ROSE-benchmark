@@ -51,7 +51,7 @@ void error_check(void);
 *       : f(n,m) - Right hand side function 
 *************************************************************/
 
-#define MSIZE 18 
+#define MSIZE 1026 
 int n,m,mits; 
 #define REAL float // flexible between float and double
 REAL tol,relax=1.0,alpha=0.0543; 
@@ -312,18 +312,18 @@ void jacobi_SIMD( )
 #pragma omp parallel for private(resid,j,i,dl,dr,dt,db,f_ps,u_ps,error_ps) reduction(+:error) // nowait  collapse(2) 
       for (i=1;i<(n-1);i++) 
       { 
-        for (j=1;j<(m-1);j++)   
+        for (j=1;j<(m-1);j+=4)   
         {
           d = _mm_loadu_ps((float*)(uold[i]+j)); 
-          dl = _mm_loadu_ps((float*)(uold[i-1]+j)); 
-          dr = _mm_loadu_ps((float*)(uold[i+1]+j)); 
-          dt = _mm_loadu_ps((float*)(uold[i]+j+1)); 
-          db = _mm_loadu_ps((float*)(uold[i]+j-1)); 
+          dt = _mm_loadu_ps((float*)(uold[i-1]+j)); 
+          db = _mm_loadu_ps((float*)(uold[i+1]+j)); 
+          dr = _mm_loadu_ps((float*)(uold[i]+j+1)); 
+          dl = _mm_loadu_ps((float*)(uold[i]+j-1)); 
           f_ps = _mm_loadu_ps((float*)(f[i]+j)); 
-          resid = (ax*(uold[i-1][j] + uold[i+1][j])\
+//          resid = (ax*(uold[i-1][j] + uold[i+1][j])\
               + ay*(uold[i][j-1] + uold[i][j+1])+ b * uold[i][j] - f[i][j])/b;  
-          resid_ps = _mm_mul_ps(ax_ps, _mm_add_ps(dl,dr));
-          resid_ps = _mm_add_ps(resid_ps,_mm_mul_ps(ay_ps, _mm_add_ps(dt,db)));
+          resid_ps = _mm_mul_ps(ax_ps, _mm_add_ps(dt,db));
+          resid_ps = _mm_add_ps(resid_ps,_mm_mul_ps(ay_ps, _mm_add_ps(dl,dr)));
           resid_ps = _mm_add_ps(resid_ps,_mm_mul_ps(b_ps, d));
           resid_ps = _mm_div_ps(_mm_sub_ps(resid_ps,f_ps),b_ps);
 
@@ -337,9 +337,9 @@ void jacobi_SIMD( )
 //          printf("u:\t %f %f %f %f\n",u[i][j],u[i][j+1],u[i][j+2],u[i][j+3]);
 //          printf("dnew:\t %f %f %f %f\n",*((float*)(&(u_ps))),*((float*)(&u_ps)+1),*((float*)(&u_ps)+2),*((float*)(&u_ps)+3));
         }
-        for(iv=0;iv<4;iv++)
-            error = error + *((float*)(&(resid_ps))+iv) * *((float*)(&(resid_ps))+iv);
       }
+      for(iv=0;iv<4;iv++)
+            error = error + (*((float*)(&(error_ps))+iv)); 
 
 //    }
     /*  omp end parallel */
@@ -348,13 +348,21 @@ void jacobi_SIMD( )
 
     if (k%(500)==0)
     {
-      printf("Finished %d iteration with error =%f\n",k, error);
+      printf("Finished %d iteration with error =%e\n",k, error);
     }
     error = sqrt(error)/(n*m);
 
     k = k + 1;
   }          /*  End iteration loop */
-
+#if 0
+      for (i=1;i<(n-1);i++) { 
+        for (j=1;j<(m-1);j++)   
+        {
+           printf("%f ",u[i][j]);
+        }
+        printf("\n");
+      }
+#endif
   printf("Total Number of Iterations:%d\n",k); 
   printf("Residual:%E\n", error); 
 

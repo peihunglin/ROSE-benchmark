@@ -49,7 +49,7 @@ void error_check(void);
 *       : f(n,m) - Right hand side function 
 *************************************************************/
 
-#define MSIZE 18 
+#define MSIZE 1026 
 int n,m,mits; 
 #define REAL float // flexible between float and double
 REAL tol,relax=1.0,alpha=0.0543; 
@@ -209,7 +209,7 @@ void jacobi( )
               + ay*(uold[i][j-1] + uold[i][j+1])+ b * uold[i][j] - f[i][j])/b;  
 
           u[i][j] = uold[i][j] - omega * resid;  
-          error = error + resid*resid ;   
+          error = error + resid*resid ;  
         }
 
 //    }
@@ -218,12 +218,20 @@ void jacobi( )
     /* Error check */
 
     if (k%500==0)
-      printf("Finished %d iteration with error =%f\n",k, error);
+      printf("Finished %d iteration with error =%e\n",k, error);
     error = sqrt(error)/(n*m);
 
     k = k + 1;
   }          /*  End iteration loop */
-
+#if 0
+      for (i=1;i<(n-1);i++) { 
+        for (j=1;j<(m-1);j++)   
+        {
+           printf("%f ",u[i][j]);
+        }
+        printf("\n");
+      }
+#endif
   printf("Total Number of Iterations:%d\n",k); 
   printf("Residual:%E\n", error); 
 
