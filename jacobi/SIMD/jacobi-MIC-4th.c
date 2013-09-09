@@ -266,12 +266,12 @@ void jacobi_SIMD( )
   REAL omega;
   int i,j,k,iv;
   REAL error,resid,ax,ay,b;
-  __m128 dl1, dr1, dt1, db1,d, dt2, db2, dl2, dr2;
-  __m128 ax_ps, ay_ps, b_ps;
-  __m128 omega_ps, resid_ps, error_ps, f_ps;
-  __m128 u_ps;
-  __m128 tmp, tmp1, tmp2;
-  __m128 t3,t4,t5,t6,t7,t9,t11,t13,t34,t36,t37,t39,t41,t43,t66,t69;
+  __m512 dl1, dr1, dt1, db1,d, dt2, db2, dl2, dr2;
+  __m512 ax_ps, ay_ps, b_ps;
+  __m512 omega_ps, resid_ps, error_ps, f_ps;
+  __m512 u_ps;
+  __m512 tmp, tmp1, tmp2;
+  __m512 t3,t4,t5,t6,t7,t9,t11,t13,t34,t36,t37,t39,t41,t43,t66,t69;
   //      double  error_local;
 
   //      float ta,tb,tc,td,te,ta1,ta2,tb1,tb2,tc1,tc2,td1,td2;
@@ -289,10 +289,10 @@ void jacobi_SIMD( )
   error = 10.0 * tol;
   k = 1;
 
-  t6 = _mm_set1_ps(0.1E1 / dx);
-  t36 = _mm_set1_ps(0.1E1 / dy);
-  t66 = _mm_set1_ps(powf(dx,2));
-  t69 = _mm_set1_ps(powf(dy,2));
+  t6 = _mm512_set1_ps(0.1E1 / dx);
+  t36 = _mm512_set1_ps(0.1E1 / dy);
+  t66 = _mm512_set1_ps(powf(dx,2));
+  t69 = _mm512_set1_ps(powf(dy,2));
 
 // An optimization on top of naive coding: promoting data handling outside the while loop
 // data properties may change since the scope is bigger:
@@ -301,7 +301,7 @@ void jacobi_SIMD( )
 //  while ((k<=mits)&&(error>tol)) 
   {
     error = 0.0;    
-    error_ps = _mm_load1_ps(&error);
+    error_ps = _mm512_extload_ps(&error,_MM_UPCONV_PS_NONE, _MM_BROADCAST_1X16, _MM_HINT_NONE);
 
     /* Copy new solution into old */
 //#pragma omp parallel
@@ -312,80 +312,89 @@ void jacobi_SIMD( )
         for(j=0;j<m;j++)
           uold[i][j] = u[i][j]; 
 
-      omega_ps = _mm_load1_ps(&omega);
-      ax_ps = _mm_load1_ps(&ax);
-      ay_ps = _mm_load1_ps(&ay);
-      b_ps = _mm_load1_ps(&b);
+    omega_ps = _mm512_extload_ps(&omega,_MM_UPCONV_PS_NONE, _MM_BROADCAST_1X16, _MM_HINT_NONE);
+    ax_ps = _mm512_extload_ps(&ax,_MM_UPCONV_PS_NONE, _MM_BROADCAST_1X16, _MM_HINT_NONE);
+    ay_ps = _mm512_extload_ps(&ay,_MM_UPCONV_PS_NONE, _MM_BROADCAST_1X16, _MM_HINT_NONE);
+    b_ps = _mm512_extload_ps(&b,_MM_UPCONV_PS_NONE, _MM_BROADCAST_1X16, _MM_HINT_NONE);
 #pragma omp target //map(in:n, m, omega, ax, ay, b, f[0:n][0:m], uold[0:n][0:m]) map(out:u[0:n][0:m])
 #pragma omp parallel for private(resid,j,i,dl,dr,dt,db,f_ps,u_ps,error_ps) reduction(+:error) // nowait  collapse(2) 
       for (i=2;i<(n-2);i++) 
       { 
-        for (j=2;j<(m-2);j+=4)   
+        for (j=2;j<(m-2);j+=16)   
         {
-          d = _mm_loadu_ps((float*)(uold[i]+j)); 
-          dt1 = _mm_loadu_ps((float*)(uold[i-1]+j)); 
-          db1 = _mm_loadu_ps((float*)(uold[i+1]+j)); 
-          dr1 = _mm_loadu_ps((float*)(uold[i]+j+1)); 
-          dl1 = _mm_loadu_ps((float*)(uold[i]+j-1)); 
-          dt2 = _mm_loadu_ps((float*)(uold[i-2]+j)); 
-          db2 = _mm_loadu_ps((float*)(uold[i+2]+j)); 
-          dr2 = _mm_loadu_ps((float*)(uold[i]+j+2)); 
-          dl2 = _mm_loadu_ps((float*)(uold[i]+j-2));
+          d    = _mm512_loadunpacklo_ps(d   ,(float*)(uold[i]+j)); 
+          d    = _mm512_loadunpackhi_ps(d   ,(float*)(uold[i]+j+16)); 
+          dt1   = _mm512_loadunpacklo_ps(dt1  ,(float*)(uold[i-1]+j)); 
+          dt1   = _mm512_loadunpackhi_ps(dt1  ,(float*)(uold[i-1]+j+16)); 
+          db1   = _mm512_loadunpacklo_ps(db1  ,(float*)(uold[i+1]+j)); 
+          db1   = _mm512_loadunpackhi_ps(db1  ,(float*)(uold[i+1]+j+16)); 
+          dr1   = _mm512_loadunpacklo_ps(dr1  ,(float*)(uold[i]+j+1)); 
+          dr1   = _mm512_loadunpackhi_ps(dr1  ,(float*)(uold[i]+j+1+16)); 
+          dl1   = _mm512_loadunpacklo_ps(dl1  ,(float*)(uold[i]+j-1)); 
+          dl1   = _mm512_loadunpackhi_ps(dl1  ,(float*)(uold[i]+j-1+16)); 
+          dt2   = _mm512_loadunpacklo_ps(dt2  ,(float*)(uold[i-2]+j)); 
+          dt2   = _mm512_loadunpackhi_ps(dt2  ,(float*)(uold[i-2]+j+16)); 
+          db2   = _mm512_loadunpacklo_ps(db2  ,(float*)(uold[i+2]+j)); 
+          db2   = _mm512_loadunpackhi_ps(db2  ,(float*)(uold[i+2]+j+16)); 
+          dr2   = _mm512_loadunpacklo_ps(dr2  ,(float*)(uold[i]+j+2)); 
+          dr2   = _mm512_loadunpackhi_ps(dr2  ,(float*)(uold[i]+j+2+16)); 
+          dl2   = _mm512_loadunpacklo_ps(dl2  ,(float*)(uold[i]+j-2)); 
+          dl2   = _mm512_loadunpackhi_ps(dl2  ,(float*)(uold[i]+j-2+16)); 
           t3 = dt1;
           t4 = d;
-          t7 = _mm_mul_ps(t6, _mm_sub_ps(t3,t4));
+          t7 = _mm512_mul_ps(t6, _mm512_sub_ps(t3,t4));
           t9 = db1;
-          t11 = _mm_mul_ps(t6,_mm_sub_ps(t4,t9));
-          t13 = _mm_mul_ps(t6,_mm_sub_ps(t7,t11));
+          t11 = _mm512_mul_ps(t6,_mm512_sub_ps(t4,t9));
+          t13 = _mm512_mul_ps(t6,_mm512_sub_ps(t7,t11));
           t34 = dr1;
-          t37 = _mm_mul_ps(t36,_mm_sub_ps(t34,t4));
+          t37 = _mm512_mul_ps(t36,_mm512_sub_ps(t34,t4));
           t39 = dl1;
-          t41 = _mm_mul_ps(t36,_mm_sub_ps(t4,t39));
-          t43 = _mm_mul_ps(t36,_mm_sub_ps(t37,t41));
+          t41 = _mm512_mul_ps(t36,_mm512_sub_ps(t4,t39));
+          t43 = _mm512_mul_ps(t36,_mm512_sub_ps(t37,t41));
 
-          tmp = _mm_sub_ps(_mm_mul_ps(_mm_sub_ps(dr2, t3), t6), t7);
-          tmp = _mm_sub_ps(_mm_mul_ps(tmp, t6), t13);
-          tmp1 = _mm_sub_ps(t11, _mm_mul_ps(_mm_sub_ps(t9, dl2),t6));  
-          tmp1 = _mm_sub_ps(t13, _mm_mul_ps(tmp1,t6));
-          tmp = _mm_mul_ps(_mm_sub_ps(tmp, tmp1), t6);
-          tmp = _mm_mul_ps(_mm_set1_ps(dx), tmp);
-          tmp = _mm_sub_ps(t13,_mm_add_ps(_mm_div_ps(tmp, _mm_set1_ps(0.12e2)),t43));
+          tmp = _mm512_sub_ps(_mm512_mul_ps(_mm512_sub_ps(dr2, t3), t6), t7);
+          tmp = _mm512_sub_ps(_mm512_mul_ps(tmp, t6), t13);
+          tmp1 = _mm512_sub_ps(t11, _mm512_mul_ps(_mm512_sub_ps(t9, dl2),t6));  
+          tmp1 = _mm512_sub_ps(t13, _mm512_mul_ps(tmp1,t6));
+          tmp = _mm512_mul_ps(_mm512_sub_ps(tmp, tmp1), t6);
+          tmp = _mm512_mul_ps(_mm512_set1_ps(dx), tmp);
+          tmp = _mm512_sub_ps(t13,_mm512_add_ps(_mm512_div_ps(tmp, _mm512_set1_ps(0.12e2)),t43));
    
-          tmp1 = _mm_sub_ps(_mm_mul_ps(_mm_sub_ps(dr2, t34),t36),t37);
-          tmp1 = _mm_mul_ps(_mm_sub_ps(_mm_mul_ps(tmp1, t36),t43),t36);
-          tmp2 = _mm_sub_ps(t41,_mm_mul_ps(_mm_sub_ps(t39, dl2), t36));
-          tmp2 = _mm_sub_ps(t43,_mm_mul_ps(tmp2,t36));
-          tmp1 = _mm_mul_ps(_mm_sub_ps(tmp1, tmp2),t36);
-          tmp1 = _mm_div_ps(_mm_mul_ps(_mm_set1_ps(dy),tmp1),_mm_set1_ps(0.12e2));
-          tmp1 = _mm_sub_ps(tmp1, _mm_mul_ps(_mm_set1_ps(alpha),t4));
-          tmp = _mm_sub_ps(tmp, tmp1);
-          tmp1 = _mm_div_ps(_mm_div_ps(_mm_set1_ps(-0.5e1), _mm_set1_ps(0.2e1)),t66);
-          tmp1 = _mm_sub_ps(tmp1, _mm_div_ps(_mm_div_ps(_mm_set1_ps(0.5e1), _mm_set1_ps(0.2e1)),t69));
-          tmp1 = _mm_sub_ps(tmp1, _mm_set1_ps(alpha));
-          u_ps = _mm_div_ps(tmp, tmp1);
+          tmp1 = _mm512_sub_ps(_mm512_mul_ps(_mm512_sub_ps(dr2, t34),t36),t37);
+          tmp1 = _mm512_mul_ps(_mm512_sub_ps(_mm512_mul_ps(tmp1, t36),t43),t36);
+          tmp2 = _mm512_sub_ps(t41,_mm512_mul_ps(_mm512_sub_ps(t39, dl2), t36));
+          tmp2 = _mm512_sub_ps(t43,_mm512_mul_ps(tmp2,t36));
+          tmp1 = _mm512_mul_ps(_mm512_sub_ps(tmp1, tmp2),t36);
+          tmp1 = _mm512_div_ps(_mm512_mul_ps(_mm512_set1_ps(dy),tmp1),_mm512_set1_ps(0.12e2));
+          tmp1 = _mm512_sub_ps(tmp1, _mm512_mul_ps(_mm512_set1_ps(alpha),t4));
+          tmp = _mm512_sub_ps(tmp, tmp1);
+          tmp1 = _mm512_div_ps(_mm512_div_ps(_mm512_set1_ps(-0.5e1), _mm512_set1_ps(0.2e1)),t66);
+          tmp1 = _mm512_sub_ps(tmp1, _mm512_div_ps(_mm512_div_ps(_mm512_set1_ps(0.5e1), _mm512_set1_ps(0.2e1)),t69));
+          tmp1 = _mm512_sub_ps(tmp1, _mm512_set1_ps(alpha));
+          u_ps = _mm512_div_ps(tmp, tmp1);
           
-          resid_ps = _mm_sub_ps(d, _mm_mul_ps(omega_ps, resid_ps));
+          resid_ps = _mm512_sub_ps(d, _mm512_mul_ps(omega_ps, resid_ps));
          
-//          f_ps = _mm_loadu_ps((float*)(f[i]+j)); 
+//          f_ps = _mm512_loadu_ps((float*)(f[i]+j)); 
 //          resid = (ax*(uold[i-1][j] + uold[i+1][j])\
               + ay*(uold[i][j-1] + uold[i][j+1])+ b * uold[i][j] - f[i][j])/b;  
-//          resid_ps = _mm_mul_ps(ax_ps, _mm_add_ps(dt,db));
-//          resid_ps = _mm_add_ps(resid_ps,_mm_mul_ps(ay_ps, _mm_add_ps(dl,dr)));
-//          resid_ps = _mm_add_ps(resid_ps,_mm_mul_ps(b_ps, d));
-//          resid_ps = _mm_div_ps(_mm_sub_ps(resid_ps,f_ps),b_ps);
+//          resid_ps = _mm512_mul_ps(ax_ps, _mm512_add_ps(dt,db));
+//          resid_ps = _mm512_add_ps(resid_ps,_mm512_mul_ps(ay_ps, _mm512_add_ps(dl,dr)));
+//          resid_ps = _mm512_add_ps(resid_ps,_mm512_mul_ps(b_ps, d));
+//          resid_ps = _mm512_div_ps(_mm512_sub_ps(resid_ps,f_ps),b_ps);
 
 //          u[i][j] = uold[i][j] - omega * resid;  
 //          error = error + resid*resid ;   
-//          u_ps = _mm_sub_ps(d, _mm_mul_ps(omega_ps, resid_ps));
-          error_ps = _mm_add_ps(error_ps, _mm_mul_ps(resid_ps,resid_ps));
-          _mm_storeu_ps((float*)(u[i]+j),u_ps);
+//          u_ps = _mm512_sub_ps(d, _mm512_mul_ps(omega_ps, resid_ps));
+          error_ps = _mm512_add_ps(error_ps, _mm512_mul_ps(resid_ps,resid_ps));
+          _mm512_storeu_ps((float*)(u[i]+j),u_ps);
 //          printf("uold:\t %f %f %f %f\n",uold[i][j],uold[i][j+1],uold[i][j+1],uold[i][j+2],uold[i][j+3]);
 //          printf("d:\t %f %f %f %f\n",*((float*)(&(d))),*((float*)(&d)+1),*((float*)(&d)+2),*((float*)(&d)+3));
 //          printf("u:\t %f %f %f %f\n",u[i][j],u[i][j+1],u[i][j+2],u[i][j+3]);
 //          printf("dnew:\t %f %f %f %f\n",*((float*)(&(u_ps))),*((float*)(&u_ps)+1),*((float*)(&u_ps)+2),*((float*)(&u_ps)+3));
         }
       }
-      for(iv=0;iv<4;iv++)
+      for(iv=0;iv<16;iv++)
             error = error + (*((float*)(&(error_ps))+iv)); 
 
 //    }
