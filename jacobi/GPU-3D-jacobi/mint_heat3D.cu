@@ -154,6 +154,7 @@ int main(int argc,char *argv[])
   int mlocal = m/ndevM;
   int klocal = k/ndevK;
   int mydevID;
+  int numDev;
   cudaError_t result;
 #endif
   double c0 = 0.5;
@@ -180,6 +181,14 @@ int main(int argc,char *argv[])
   double time_elapsed;
   double Gflops = 0.0;
 #if multiGPU
+  result = cudaGetDeviceCount(&numDev);
+  gpuErrchk(result);
+  cudaExtent ext_dev_1_Uold[numDev];
+  cudaPitchedPtr dev_1_Uold[numDev];
+  cudaMemcpy3DParms param_1_dev_1_Uold[numDev];
+  cudaExtent ext_dev_2_Unew[numDev];
+  cudaPitchedPtr dev_2_Unew[numDev];
+  cudaMemcpy3DParms param_2_dev_2_Unew[numDev];
   int devidxN, devidxM, devidxK;
   int memoffN, memoffM, memoffK;
   mydevID=0;
@@ -197,33 +206,34 @@ int main(int argc,char *argv[])
   memoffK = devidxK * klocal;
 
 // Malloc sub-region on the device: size = (nlocal+2) * (mlocal+2) * (klocal+2)
-  cudaError_t stat_dev_1_Uold;
-  cudaExtent ext_dev_1_Uold = make_cudaExtent(((nlocal+2)) * sizeof(double ),((mlocal+2)),((klocal+2)));
-  cudaPitchedPtr dev_1_Uold;
-  stat_dev_1_Uold = cudaMalloc3D(&dev_1_Uold,ext_dev_1_Uold);
-  gpuErrchk(stat_dev_1_Uold);   
+  ext_dev_1_Uold[mydevID] = make_cudaExtent(((nlocal+2)) * sizeof(double ),((mlocal+2)),((klocal+2)));
+  result = cudaMalloc3D(&dev_1_Uold[mydevID],ext_dev_1_Uold[mydevID]);
+  gpuErrchk(result);
 /* Copy host to device */
-  cudaMemcpy3DParms param_1_dev_1_Uold = {0};
-  param_1_dev_1_Uold . srcPtr = make_cudaPitchedPtr(((void *)Uold[memoffK][memoffM]),((nlocal+2)) * sizeof(double ),((nlocal+2)),((mlocal+2)));
-  param_1_dev_1_Uold . dstPtr = dev_1_Uold;
-  param_1_dev_1_Uold . extent = ext_dev_1_Uold;
-  param_1_dev_1_Uold . kind = cudaMemcpyHostToDevice;
-  stat_dev_1_Uold = cudaMemcpy3D(&param_1_dev_1_Uold);
-  gpuErrchk(stat_dev_1_Uold);   
+//  param_1_dev_1_Uold[mydevID] = {0};
+  cudaMemcpy3DParms tmp = {0};
+  param_1_dev_1_Uold[mydevID] = tmp;
+  param_1_dev_1_Uold[mydevID] . srcPtr = make_cudaPitchedPtr(((void *)Uold[memoffK][memoffM]),((nlocal+2)) * sizeof(double ),((nlocal+2)),((mlocal+2)));
+  param_1_dev_1_Uold[mydevID] . dstPtr = dev_1_Uold[mydevID];
+  param_1_dev_1_Uold[mydevID] . extent = ext_dev_1_Uold[mydevID];
+  param_1_dev_1_Uold[mydevID] . kind = cudaMemcpyHostToDevice;
+  result = cudaMemcpy3D(&param_1_dev_1_Uold[mydevID]);
+  gpuErrchk(result);
 
 // Malloc sub-region on the device: size = (nlocal+2) * (mlocal+2) * (klocal+2)
-  cudaError_t stat_dev_2_Unew;
-  cudaExtent ext_dev_2_Unew = make_cudaExtent(((nlocal+2)) * sizeof(double ),((mlocal+2)),((klocal+2)));
-  cudaPitchedPtr dev_2_Unew;
-  stat_dev_2_Unew = cudaMalloc3D(&dev_2_Unew,ext_dev_2_Unew);
-  gpuErrchk(stat_dev_2_Unew);   
+  ext_dev_2_Unew[mydevID] = make_cudaExtent(((nlocal+2)) * sizeof(double ),((mlocal+2)),((klocal+2)));
+  result = cudaMalloc3D(&dev_2_Unew[mydevID],ext_dev_2_Unew[mydevID]);
+  gpuErrchk(result);
 /* Copy host to device */
-  cudaMemcpy3DParms param_2_dev_2_Unew = {0};
-  param_2_dev_2_Unew . srcPtr = make_cudaPitchedPtr(((void *)Unew[memoffK][memoffM]),((nlocal+2)) * sizeof(double ),((nlocal+2)),(mlocal+2));
-  param_2_dev_2_Unew . dstPtr = dev_2_Unew;
-  param_2_dev_2_Unew . extent = ext_dev_2_Unew;
-  param_2_dev_2_Unew . kind = cudaMemcpyHostToDevice;
-  stat_dev_2_Unew = cudaMemcpy3D(&param_2_dev_2_Unew);
+//  param_2_dev_2_Unew[mydevID] = {0};
+  cudaMemcpy3DParms tmp2 = {0};
+  param_2_dev_2_Unew[mydevID] = tmp2;
+  param_2_dev_2_Unew[mydevID] . srcPtr = make_cudaPitchedPtr(((void *)Unew[memoffK][memoffM]),((nlocal+2)) * sizeof(double ),((nlocal+2)),(mlocal+2));
+  param_2_dev_2_Unew[mydevID] . dstPtr = dev_2_Unew[mydevID];
+  param_2_dev_2_Unew[mydevID] . extent = ext_dev_2_Unew[mydevID];
+  param_2_dev_2_Unew[mydevID] . kind = cudaMemcpyHostToDevice;
+  result = cudaMemcpy3D(&param_2_dev_2_Unew[mydevID]);
+  gpuErrchk(result);
 
 // increse devID and move to next device
   mydevID++;
@@ -269,6 +279,7 @@ int main(int argc,char *argv[])
     int t = 0;
     while(t < T){
       t++;
+      mydevID=0;
 // start the 3D loop for all device to initialize the data
       for(devidxK=0; devidxK < ndevK; ++devidxK)
       for(devidxM=0; devidxM < ndevM; ++devidxM)
@@ -282,10 +293,11 @@ int main(int argc,char *argv[])
         float invYnumblockDim_1_1527 = 1.00000F / num2blockDim_1_1527;
         dim3 blockDim_1_1527(16,16,1);
         dim3 gridDim_1_1527(num1blockDim_1_1527,num2blockDim_1_1527*num3blockDim_1_1527);
-        mint_1_1527<<<gridDim_1_1527,blockDim_1_1527>>>(n,m,k,c0,c1,dev_2_Unew,dev_1_Uold,num2blockDim_1_1527,invYnumblockDim_1_1527);
+        mint_1_1527<<<gridDim_1_1527,blockDim_1_1527>>>(n,m,k,c0,c1,dev_2_Unew[mydevID],dev_1_Uold[mydevID],num2blockDim_1_1527,invYnumblockDim_1_1527);
         cudaThreadSynchronize();
-        cudaError_t err_mint_1_1527 = cudaGetLastError();
-        gpuErrchk(err_mint_1_1527);  
+        result = cudaGetLastError();
+        gpuErrchk(result); 
+        ++mydevID; 
       } 
     }
 #else
