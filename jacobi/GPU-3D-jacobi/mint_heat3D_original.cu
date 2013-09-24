@@ -1,4 +1,3 @@
-#define multiGPU 1
 /* 
    by Didem Unat 
    3D 7-point jacobi
@@ -14,15 +13,6 @@
 #include <stdlib.h>
 #include <assert.h>
 #include <sys/time.h>
-#define gpuErrchk(ans) { gpuAssert((ans), __FILE__, __LINE__); }
-inline void gpuAssert(cudaError_t code, char *file, int line, bool abort=true)
-{
-   if (code != cudaSuccess) 
-   {
-      fprintf(stderr,"GPUassert: %s %s %d\n", cudaGetErrorString(code), file, line);
-      if (abort) exit(code);
-   }
-}
 #define REAL double
 #define FLOPS 8 
 #define chunk 64
@@ -146,22 +136,10 @@ int main(int argc,char *argv[])
   int n = 256;
   int m = 256;
   int k = 256;
-#if multiGPU
-  int ndevN = 1;
-  int ndevM = 1;
-  int ndevK = 2;
-  int nlocal = n/ndevN;
-  int mlocal = m/ndevM;
-  int klocal = k/ndevK;
-  int mydevID;
-  cudaError_t result;
-#endif
   double c0 = 0.5;
   double c1 = -0.25;
   double ***Unew;
   double ***Uold;
-// Allocate overall problem on CPUs
-// We need to distribute the data to all GPUs later.
   Unew = alloc3D(n + 2,m + 2,k + 2);
   Uold = alloc3D(n + 2,m + 2,k + 2);
   init(Unew,n + 2,m + 2,k + 2);
@@ -179,56 +157,6 @@ int main(int argc,char *argv[])
   int nIters = 0;
   double time_elapsed;
   double Gflops = 0.0;
-#if multiGPU
-  int devidxN, devidxM, devidxK;
-  int memoffN, memoffM, memoffK;
-  mydevID=0;
-// start the 3D loop for all device to initialize the data
-  for(devidxK=0; devidxK < ndevK; ++devidxK)
-  for(devidxM=0; devidxM < ndevM; ++devidxM)
-  for(devidxN=0; devidxN < ndevN; ++devidxN)  
-  {
-  result = cudaSetDevice(mydevID);
-  gpuErrchk(result);   
-// get the starting offset of N, M, K in the 3D array
-// assuming the array size is dividable into multiple pieces
-  memoffN = devidxN * nlocal;
-  memoffM = devidxM * mlocal;
-  memoffK = devidxK * klocal;
-
-// Malloc sub-region on the device: size = (nlocal+2) * (mlocal+2) * (klocal+2)
-  cudaError_t stat_dev_1_Uold;
-  cudaExtent ext_dev_1_Uold = make_cudaExtent(((nlocal+2)) * sizeof(double ),((mlocal+2)),((klocal+2)));
-  cudaPitchedPtr dev_1_Uold;
-  stat_dev_1_Uold = cudaMalloc3D(&dev_1_Uold,ext_dev_1_Uold);
-  gpuErrchk(stat_dev_1_Uold);   
-/* Copy host to device */
-  cudaMemcpy3DParms param_1_dev_1_Uold = {0};
-  param_1_dev_1_Uold . srcPtr = make_cudaPitchedPtr(((void *)Uold[memoffK][memoffM]),((nlocal+2)) * sizeof(double ),((nlocal+2)),((mlocal+2)));
-  param_1_dev_1_Uold . dstPtr = dev_1_Uold;
-  param_1_dev_1_Uold . extent = ext_dev_1_Uold;
-  param_1_dev_1_Uold . kind = cudaMemcpyHostToDevice;
-  stat_dev_1_Uold = cudaMemcpy3D(&param_1_dev_1_Uold);
-  gpuErrchk(stat_dev_1_Uold);   
-
-// Malloc sub-region on the device: size = (nlocal+2) * (mlocal+2) * (klocal+2)
-  cudaError_t stat_dev_2_Unew;
-  cudaExtent ext_dev_2_Unew = make_cudaExtent(((nlocal+2)) * sizeof(double ),((mlocal+2)),((klocal+2)));
-  cudaPitchedPtr dev_2_Unew;
-  stat_dev_2_Unew = cudaMalloc3D(&dev_2_Unew,ext_dev_2_Unew);
-  gpuErrchk(stat_dev_2_Unew);   
-/* Copy host to device */
-  cudaMemcpy3DParms param_2_dev_2_Unew = {0};
-  param_2_dev_2_Unew . srcPtr = make_cudaPitchedPtr(((void *)Unew[memoffK][memoffM]),((nlocal+2)) * sizeof(double ),((nlocal+2)),(mlocal+2));
-  param_2_dev_2_Unew . dstPtr = dev_2_Unew;
-  param_2_dev_2_Unew . extent = ext_dev_2_Unew;
-  param_2_dev_2_Unew . kind = cudaMemcpyHostToDevice;
-  stat_dev_2_Unew = cudaMemcpy3D(&param_2_dev_2_Unew);
-
-// increse devID and move to next device
-  mydevID++;
-  }
-#else
 /* Mint: Replaced Pragma: #pragma mint copy( Uold, toDevice,( n+2 ),( m+2 ),( k+2 ) ) */
   cudaError_t stat_dev_1_Uold;
   cudaExtent ext_dev_1_Uold = make_cudaExtent(((n+2)) * sizeof(double ),((m+2)),((k+2)));
@@ -263,32 +191,6 @@ int main(int argc,char *argv[])
   stat_dev_2_Unew = cudaMemcpy3D(&param_2_dev_2_Unew);
   if (stat_dev_2_Unew != cudaSuccess) 
     fprintf(stderr,"%s\n",cudaGetErrorString(stat_dev_2_Unew));
-#endif
-#if multiGPU
-    time_elapsed = getTime();
-    int t = 0;
-    while(t < T){
-      t++;
-// start the 3D loop for all device to initialize the data
-      for(devidxK=0; devidxK < ndevK; ++devidxK)
-      for(devidxM=0; devidxM < ndevM; ++devidxM)
-      for(devidxN=0; devidxN < ndevN; ++devidxN)  
-      {
-        result = cudaSetDevice(mydevID);
-        gpuErrchk(result);  
-        int num3blockDim_1_1527 = (klocal- 1 + 1) % 16 == 0?(klocal- 1 + 1) / 16 : (klocal- 1 + 1) / 16 + 1;
-        int num2blockDim_1_1527 = (mlocal- 1 + 1) % 16 == 0?(mlocal- 1 + 1) / 16 : (mlocal- 1 + 1) / 16 + 1;
-        int num1blockDim_1_1527 = (nlocal- 1 + 1) % 16 == 0?(nlocal- 1 + 1) / 16 : (nlocal- 1 + 1) / 16 + 1;
-        float invYnumblockDim_1_1527 = 1.00000F / num2blockDim_1_1527;
-        dim3 blockDim_1_1527(16,16,1);
-        dim3 gridDim_1_1527(num1blockDim_1_1527,num2blockDim_1_1527*num3blockDim_1_1527);
-        mint_1_1527<<<gridDim_1_1527,blockDim_1_1527>>>(n,m,k,c0,c1,dev_2_Unew,dev_1_Uold,num2blockDim_1_1527,invYnumblockDim_1_1527);
-        cudaThreadSynchronize();
-        cudaError_t err_mint_1_1527 = cudaGetLastError();
-        gpuErrchk(err_mint_1_1527);  
-      } 
-    }
-#else
 {
     time_elapsed = getTime();
     int t = 0;
@@ -328,8 +230,7 @@ int main(int argc,char *argv[])
   }
   cudaFree(dev_2_Unew . ptr);
   cudaFree(dev_1_Uold . ptr);
-#endif
- 
+  
 #pragma mint copy(Uold, fromDevice, (n+2), (m+2), (k+2))
   time_elapsed = getTime() - time_elapsed;
   Gflops = ((double )((nIters * n * m * k) * 1.0e-9 * 8)) / time_elapsed;
